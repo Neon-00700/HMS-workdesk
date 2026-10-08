@@ -1,0 +1,175 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Hamyaran Workdesk design tokens ─────────────────────────── */
+:root {
+  --radius: 1rem;
+
+  /* Light theme — soft sage background, deep green primary */
+  --background: 138 18% 94%;
+  --foreground: 152 36% 11%;
+
+  --card: 0 0% 100%;
+  --card-foreground: 152 36% 11%;
+
+  --popover: 0 0% 100%;
+  --popover-foreground: 152 36% 11%;
+
+  --primary: 150 62% 30%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 140 14% 90%;
+  --secondary-foreground: 152 30% 16%;
+
+  --muted: 138 12% 91%;
+  --muted-foreground: 150 8% 43%;
+
+  --accent: 150 45% 90%;
+  --accent-foreground: 150 62% 24%;
+
+  --destructive: 4 72% 48%;
+  --destructive-foreground: 0 0% 100%;
+
+  --success: 150 62% 30%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 42%;
+  --warning-foreground: 0 0% 100%;
+  --info: 212 80% 46%;
+  --info-foreground: 0 0% 100%;
+
+  --border: 140 15% 88%;
+  --input: 140 12% 84%;
+  --ring: 150 62% 30%;
+
+  --shadow-card: 0 1px 2px rgb(18 38 27 / 0.05), 0 4px 14px rgb(18 38 27 / 0.05);
+  --shadow-pop: 0 12px 32px rgb(18 38 27 / 0.12), 0 2px 6px rgb(18 38 27 / 0.06);
+
+  /* Deep-green sidebar (both themes keep the dark green rail) */
+  --sidebar: 151 49% 9%;
+  --sidebar-foreground: 150 30% 88%;
+  --sidebar-muted: 150 16% 58%;
+  --sidebar-active: 151 52% 26%;
+  --sidebar-active-foreground: 0 0% 100%;
+
+  --control-h-sm: 2rem;
+  --control-h: 2.5rem;
+  --control-h-lg: 2.75rem;
+}
+
+.dark {
+  --background: 160 18% 7%;
+  --foreground: 150 12% 92%;
+
+  --card: 160 14% 10.5%;
+  --card-foreground: 150 12% 92%;
+
+  --popover: 160 16% 13%;
+  --popover-foreground: 150 12% 92%;
+
+  --primary: 150 55% 42%;
+  --primary-foreground: 160 25% 6%;
+
+  --secondary: 160 12% 17%;
+  --secondary-foreground: 150 12% 88%;
+
+  --muted: 160 12% 15%;
+  --muted-foreground: 150 8% 58%;
+
+  --accent: 150 40% 15%;
+  --accent-foreground: 150 55% 72%;
+
+  --destructive: 4 65% 52%;
+  --destructive-foreground: 0 0% 100%;
+
+  --success: 150 55% 42%;
+  --success-foreground: 160 25% 6%;
+  --warning: 38 85% 50%;
+  --warning-foreground: 160 25% 6%;
+  --info: 212 75% 55%;
+  --info-foreground: 160 25% 6%;
+
+  --border: 160 12% 18%;
+  --input: 160 12% 22%;
+  --ring: 150 55% 46%;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.4), 0 4px 14px rgb(0 0 0 / 0.3);
+  --shadow-pop: 0 12px 32px rgb(0 0 0 / 0.5), 0 2px 8px rgb(0 0 0 / 0.4);
+
+  --sidebar: 155 40% 6%;
+  --sidebar-foreground: 150 20% 88%;
+  --sidebar-muted: 150 12% 52%;
+  --sidebar-active: 151 50% 24%;
+  --sidebar-active-foreground: 0 0% 100%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "ss01";
+  }
+  .tnum {
+    font-variant-numeric: tabular-nums;
+  }
+  /* Slim scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--muted-foreground) / 0.3);
+    border-radius: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .sidebar-surface {
+    background: hsl(var(--sidebar));
+    color: hsl(var(--sidebar-foreground));
+  }
+  .header-surface {
+    background: hsl(var(--background) / 0.85);
+    backdrop-filter: blur(12px);
+  }
+  .card-elev {
+    @apply rounded-2xl border bg-card text-card-foreground shadow-card;
+  }
+  .input-base {
+    @apply flex h-10 w-full rounded-xl border border-input bg-card px-3 py-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  /* Kanban horizontal scroll on mobile */
+  .kanban-scroll {
+    scroll-snap-type: x proximity;
+  }
+  .kanban-scroll > * {
+    scroll-snap-align: start;
+  }
+  /* Chat pattern backgrounds */
+  .chat-pattern-dots {
+    background-image: radial-gradient(hsl(var(--muted-foreground) / 0.16) 1px, transparent 1px);
+    background-size: 18px 18px;
+  }
+  .chat-pattern-grid {
+    background-image:
+      linear-gradient(hsl(var(--muted-foreground) / 0.1) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--muted-foreground) / 0.1) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+}
