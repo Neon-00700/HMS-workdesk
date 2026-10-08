@@ -7,7 +7,7 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  Plus, Search, MoreHorizontal, Pencil, Trash2, X, Save, Settings2, Bookmark,
+  Plus, Search, MoreHorizontal, Pencil, Trash2, X, Save, Settings2, Bookmark, CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -356,6 +356,15 @@ function ColumnMenu({ column, wip, setWip, onRename }: { column: BoardColumn; wi
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={onRename}><Pencil className="h-4 w-4" /> تغییر نام</DropdownMenuItem>
         <DropdownMenuItem onSelect={(e) => { e.preventDefault(); setWipOpen(true); }}><Settings2 className="h-4 w-4" /> سقف WIP</DropdownMenuItem>
+        {/* Completion is decided per column, so the board owner decides which
+            column counts as "done". Only one column may hold the flag. */}
+        <DropdownMenuCheckboxItem
+          checked={column.isDoneColumn === true}
+          onSelect={(e) => e.preventDefault()}
+          onCheckedChange={(v) => cols.update.mutate({ bid: column.boardId, cid: column.id, patch: { isDoneColumn: v === true } })}
+        >
+          <CheckCircle2 className="h-4 w-4" /> این ستون یعنی انجام‌شده
+        </DropdownMenuCheckboxItem>
         <DropdownMenuSeparator />
         <ConfirmDialog
           trigger={<DropdownMenuItem onSelect={(e) => e.preventDefault()} className="text-destructive"><Trash2 className="h-4 w-4" /> حذف ستون</DropdownMenuItem>}

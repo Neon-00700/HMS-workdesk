@@ -42,7 +42,11 @@ function Brand({ collapsed }: { collapsed: boolean }) {
 export function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const params = useParams();
-  const pid = (params?.id as string) ?? useWorkspaceStore((s) => s.activeProjectId);
+  // Both hooks must run unconditionally: short-circuiting one of them behind
+  // `??` changes the hook count between project and non-project routes and
+  // crashes React. Read the store first, then prefer the route param.
+  const activePid = useWorkspaceStore((s) => s.activeProjectId);
+  const pid = (params?.id as string) ?? activePid;
   const { data: convs = [] } = useConversations();
   const unread = convs.reduce((s, c) => s + c.unreadCount, 0);
 

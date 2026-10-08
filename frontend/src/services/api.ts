@@ -5,6 +5,10 @@
    call-site unchanged. */
 import { db, pushActivity, pushNotification } from "./mock-db";
 import { uid, sleep } from "@/lib/utils";
+import {
+  isTaskDone, recomputeProgress, syncCompletion, matchesText, byOrder, taskTimeState,
+  type TaskTimeState,
+} from "@/lib/task-state";
 import { hashPassword, verifyPassword } from "@/lib/password";
 import { storeFileBlob } from "@/lib/file-store";
 import type {
@@ -56,6 +60,21 @@ export interface TaskQuery {
   blockedOnly?: boolean;
   page?: number;
   pageSize?: number;
+}
+
+/** Aggregates for boards, dashboards and panels. Counted over the whole
+    task set, so they never hit a page ceiling. */
+export interface TaskStats {
+  total: number;
+  done: number;
+  open: number;
+  overdue: number;
+  scheduled: number;
+  unscheduled: number;
+  blocked: number;
+  unassigned: number;
+  remainingMinutes: number;
+  progress: number;
 }
 
 /* ═══════════ AUTH ═══════════ */
@@ -194,7 +213,9 @@ export const rolesApi = {
 function withLiveStats(p: Project): Project {
   const d = db.get();
   const tasks = d.tasks.filter((t) => t.projectId === p.id && !t.isArchived);
-  const open = tasks.filter((t) => t.status !== "done" && t.status !== "released");
+  const boardOf = new Map(d.boards.map((b) => [b.id, b]));
+  const done = (t: Task) => isTaskDone(t, boardOf.get(t.boardId));
+  const open = tasks.filter((t) => !done(t));
   const doneCount = tasks.length - open.length;
   return {
     ...p,
@@ -257,6 +278,34 @@ export const projectsApi = {
     await latency();
     db.update((d) => {
       d.projects = d.projects.filter((p) => p.id !== id);
+      // Cascade: a deleted project must not leave orphaned records behind.
+      const boardIds = new Set(d.boards.filter((b) => b.projectId === id).map((b) => b.id));
+      const taskIds = new Set(d.tasks.filter((t) => t.projectId === id).map((t) => t.id));
+      const convIds = new Set(d.conversations.filter((c) => c.projectId === id).map((c) => c.id));
+
+      d.boards = d.boards.filter((b) => b.projectId !== id);
+      d.tasks = d.tasks.filter((t) => t.projectId !== id);
+      d.members = Object.fromEntries(
+        Object.entries(d.members).filter(([pid]) => pid !== id),
+      );
+      d.milestones = d.milestones.filter((m) => m.projectId !== id);
+      d.epics = d.epics.filter((e) => e.projectId !== id);
+      d.files = d.files.filter((f) => f.projectId !== id);
+      d.events = d.events.filter((e) => e.projectId !== id);
+      d.activity = d.activity.filter((a) => a.projectId !== id);
+      d.conversations = d.conversations.filter((c) => c.projectId !== id);
+      d.messages = d.messages.filter((m) => !convIds.has(m.conversationId));
+      d.notifications = d.notifications.filter(
+        (n) => !n.link || !taskIds.has(n.link.replace(/^\/tasks\//, "")),
+      );
+
+      // Drop task references held by the surviving tasks.
+      d.tasks.forEach((t) => {
+        t.dependencies = t.dependencies.filter((dep) => !taskIds.has(dep.dependsOnTaskId));
+        t.blockedBy = t.blockedBy.filter((x) => !taskIds.has(x));
+        t.blocking = t.blocking.filter((x) => !taskIds.has(x));
+      });
+      void boardIds;
     });
     pushActivity({ actorId: me().id, action: "project.delete", actionFa: "پروژه را حذف کرد", entityType: "project" });
   },
@@ -346,6 +395,16 @@ export const boardsApi = {
       const c = b?.columns.find((x) => x.id === columnId);
       if (!b || !c) throw new ApiError("not_found", "ستون یافت نشد.", 404);
       Object.assign(c, patch);
+      // Completion is a board-level flag: exactly one column may hold it, so
+      // promoting one demotes the others and every task in a column that just
+      // lost the flag has its progress/completion recomputed.
+      if (c.isDoneColumn === true) {
+        b.columns.forEach((x) => { if (x.id !== c.id) x.isDoneColumn = false; });
+        d.tasks.filter((t) => t.boardId === b.id).forEach((t) => {
+          t.progress = recomputeProgress(t, b);
+          syncCompletion(t, b);
+        });
+      }
       out = b;
     });
     return out!;
@@ -389,15 +448,15 @@ function taskMatches(t: Task, q: TaskQuery): boolean {
   if (q.boardId && t.boardId !== q.boardId) return false;
   if (q.assigneeId && !t.assigneeIds.includes(q.assigneeId)) return false;
   if (q.priorities?.length && !q.priorities.includes(t.priority)) return false;
+  // A task with no stream is never excluded by a stream filter.
   if (q.streams?.length && t.stream && !q.streams.includes(t.stream)) return false;
   if (q.overdueOnly) {
+    if (isTaskDone(t, db.board(t.boardId))) return false;
     if (!t.dueDate || new Date(t.dueDate).getTime() > Date.now()) return false;
-    if (t.status === "done" || t.status === "released") return false;
   }
   if (q.blockedOnly && !t.isBlocked) return false;
   if (q.search) {
-    const s = q.search.trim();
-    if (s && !t.title.includes(s) && !t.description.includes(s)) return false;
+    if (!matchesText(t.title, q.search) && !matchesText(t.description, q.search)) return false;
   }
   return true;
 }
@@ -407,8 +466,40 @@ export const tasksApi = {
     await latency();
     const all = db.get().tasks.filter((t) => !t.isArchived && taskMatches(t, q));
     const page = q.page ?? 1;
-    const pageSize = q.pageSize ?? 50;
-    return { items: all.slice((page - 1) * pageSize, page * pageSize), total: all.length, page, pageSize };
+    // Boards must render whole columns, so the default page covers a whole board.
+    const pageSize = q.pageSize ?? 500;
+    return {
+      items: all.slice((page - 1) * pageSize, page * pageSize).sort(byOrder),
+      total: all.length,
+      page,
+      pageSize,
+    };
+  },
+  /** Counts over the FULL task set, never over a page. */
+  async stats(q: TaskQuery = {}): Promise<TaskStats> {
+    await latency();
+    const d = db.get();
+    const tasks = d.tasks.filter((t) => !t.isArchived && taskMatches(t, q));
+    const boardOf = new Map(d.boards.map((b) => [b.id, b]));
+    const byState = (s: TaskTimeState) =>
+      tasks.filter((t) => taskTimeState(t, boardOf.get(t.boardId)) === s).length;
+    const done = byState("done");
+    const openTasks = tasks.filter((t) => !isTaskDone(t, boardOf.get(t.boardId)));
+    return {
+      total: tasks.length,
+      done,
+      open: tasks.length - done,
+      overdue: byState("overdue"),
+      scheduled: byState("scheduled"),
+      unscheduled: byState("unscheduled"),
+      blocked: openTasks.filter((t) => t.isBlocked).length,
+      unassigned: openTasks.filter((t) => t.assigneeIds.length === 0).length,
+      remainingMinutes: openTasks.reduce(
+        (s, t) => s + Math.max(0, (t.estimateMinutes ?? 0) - t.spentMinutes),
+        0,
+      ),
+      progress: tasks.length ? Math.round((done / tasks.length) * 100) : 0,
+    };
   },
   async get(id: string): Promise<Task> {
     await latency();
@@ -483,12 +574,18 @@ export const tasksApi = {
       if (!t) throw new ApiError("not_found", "تسک یافت نشد.", 404);
       const board = d.boards.find((b) => b.id === t.boardId);
       const col = board?.columns.find((c) => c.id === columnId);
+      if (!col) throw new ApiError("not_found", "ستون مقصد یافت نشد.", 404);
+      const wasDone = isTaskDone(t, board);
+      const nowDone = col.isDoneColumn === true;
+      // Remember where it came from so a one-click complete can be undone.
+      if (nowDone && !wasDone) t.previousColumnId = t.columnId;
+      if (!nowDone && wasDone) t.previousColumnId = undefined;
       t.columnId = columnId;
-      t.status = col?.key ?? t.status;
+      t.status = col.key;
       t.order = order ?? Date.now();
-      t.isBlocked = t.status === "blocked";
-      if (col?.isDoneColumn) { t.progress = 100; t.completedAt = now(); }
-      else { if (t.progress === 100) t.progress = 90; t.completedAt = undefined; }
+      t.isBlocked = col.key === "blocked";
+      t.progress = recomputeProgress(t, board);
+      syncCompletion(t, board);
       t.updatedAt = now();
       out = t;
     });
@@ -505,9 +602,9 @@ export const tasksApi = {
       if (!t || !board || !col) throw new ApiError("not_found", "مقصد نامعتبر است.", 404);
       t.boardId = boardId; t.columnId = columnId; t.status = col.key;
       t.isBlocked = col.key === "blocked";
-      if (col.isDoneColumn) { t.progress = 100; t.completedAt = now(); }
-      else { t.completedAt = undefined; }
       t.order = Date.now(); t.updatedAt = now();
+      t.progress = recomputeProgress(t, board);
+      syncCompletion(t, board);
       out = t;
     });
     return out!;
@@ -575,7 +672,11 @@ export const tasksApi = {
     db.update((d) => {
       const t = d.tasks.find((x) => x.id === taskId);
       const it = t?.checklist.find((x) => x.id === itemId);
-      if (t && it) { it.isDone = !it.isDone; t.updatedAt = now(); out = t; }
+      if (t && it) {
+        it.isDone = !it.isDone;
+        t.progress = recomputeProgress(t, d.boards.find((b) => b.id === t.boardId));
+        t.updatedAt = now(); out = t;
+      }
     });
     return out!;
   },
@@ -584,7 +685,11 @@ export const tasksApi = {
     let out: Task | undefined;
     db.update((d) => {
       const t = d.tasks.find((x) => x.id === taskId);
-      if (t) { t.checklist.push({ id: uid("ch"), text, isDone: false, assigneeId }); out = t; }
+      if (t) {
+        t.checklist.push({ id: uid("ch"), text, isDone: false, assigneeId });
+        t.progress = recomputeProgress(t, d.boards.find((b) => b.id === t.boardId));
+        out = t;
+      }
     });
     return out!;
   },
@@ -603,7 +708,11 @@ export const tasksApi = {
     let out: Task | undefined;
     db.update((d) => {
       const t = d.tasks.find((x) => x.id === taskId);
-      if (t) { t.checklist = t.checklist.filter((x) => x.id !== item); t.updatedAt = now(); out = t; }
+      if (t) {
+        t.checklist = t.checklist.filter((x) => x.id !== item);
+        t.progress = recomputeProgress(t, d.boards.find((b) => b.id === t.boardId));
+        t.updatedAt = now(); out = t;
+      }
     });
     return out!;
   },
@@ -612,7 +721,11 @@ export const tasksApi = {
     let out: Task | undefined;
     db.update((d) => {
       const t = d.tasks.find((x) => x.id === taskId);
-      if (t) { t.subtasks.push({ id: uid("st"), title, isDone: false }); out = t; }
+      if (t) {
+        t.subtasks.push({ id: uid("st"), title, isDone: false });
+        t.progress = recomputeProgress(t, d.boards.find((b) => b.id === t.boardId));
+        out = t;
+      }
     });
     return out!;
   },
@@ -621,7 +734,11 @@ export const tasksApi = {
     let out: Task | undefined;
     db.update((d) => {
       const t = d.tasks.find((x) => x.id === taskId);
-      if (t) { t.subtasks = t.subtasks.filter((x) => x.id !== subId); t.updatedAt = now(); out = t; }
+      if (t) {
+        t.subtasks = t.subtasks.filter((x) => x.id !== subId);
+        t.progress = recomputeProgress(t, d.boards.find((b) => b.id === t.boardId));
+        t.updatedAt = now(); out = t;
+      }
     });
     return out!;
   },
@@ -633,8 +750,7 @@ export const tasksApi = {
       const st = t?.subtasks.find((x) => x.id === subtaskId);
       if (t && st) {
         st.isDone = !st.isDone;
-        const done = t.subtasks.filter((s) => s.isDone).length;
-        if (t.subtasks.length) t.progress = Math.round((done / t.subtasks.length) * 100);
+        t.progress = recomputeProgress(t, d.boards.find((b) => b.id === t.boardId));
         t.updatedAt = now(); out = t;
       }
     });
@@ -1015,7 +1131,8 @@ export const reportsApi = {
   },
   async workload(projectId?: string): Promise<WorkloadRow[]> {
     await latency();
-    const tasks = db.get().tasks.filter((t) => (!projectId || t.projectId === projectId) && !t.isArchived);
+    const d = db.get();
+    const tasks = d.tasks.filter((t) => (!projectId || t.projectId === projectId) && !t.isArchived);
     const byUser = new Map<string, Task[]>();
     tasks.forEach((t) => t.assigneeIds.forEach((aid) => {
       if (!byUser.has(aid)) byUser.set(aid, []);
@@ -1025,8 +1142,12 @@ export const reportsApi = {
     byUser.forEach((ts, userId) => {
       const user = db.user(userId);
       if (!user) return;
-      const done = ts.filter((t) => t.status === "done" || t.status === "released").length;
-      const overdue = ts.filter((t) => t.dueDate && new Date(t.dueDate).getTime() < Date.now() && t.status !== "done" && t.status !== "released").length;
+      const boardOf = new Map(d.boards.map((b) => [b.id, b]));
+      const done = ts.filter((t) => isTaskDone(t, boardOf.get(t.boardId))).length;
+      const overdue = ts.filter((t) => {
+        if (isTaskDone(t, boardOf.get(t.boardId))) return false;
+        return !!t.dueDate && new Date(t.dueDate).getTime() < Date.now();
+      }).length;
       rows.push({
         userId, user, assigned: ts.length, completed: done, overdue,
         estimateMinutes: ts.reduce((s, t) => s + (t.estimateMinutes ?? 0), 0),
@@ -1059,14 +1180,17 @@ export const reportsApi = {
   },
   async streams(projectId: string): Promise<StreamProgress[]> {
     await latency();
-    const tasks = db.get().tasks.filter((t) => t.projectId === projectId && !t.isArchived && t.stream);
+    const d = db.get();
+    const boardOf = new Map(d.boards.map((b) => [b.id, b]));
+    // Tasks without a stream are grouped under "other" rather than dropped.
+    const tasks = d.tasks.filter((t) => t.projectId === projectId && !t.isArchived);
     const map = new Map<string, { total: number; done: number }>();
     tasks.forEach((t) => {
-      const s = t.stream!;
+      const s = t.stream ?? "other";
       if (!map.has(s)) map.set(s, { total: 0, done: 0 });
       const e = map.get(s)!;
       e.total += 1;
-      if (t.status === "done" || t.status === "released") e.done += 1;
+      if (isTaskDone(t, boardOf.get(t.boardId))) e.done += 1;
     });
     return [...map.entries()].map(([stream, v]) => ({
       stream: stream as StreamProgress["stream"],
@@ -1080,7 +1204,8 @@ export const reportsApi = {
     const d = db.get();
     return d.projects.map((p) => {
       const tasks = d.tasks.filter((t) => t.projectId === p.id && !t.isArchived);
-      const done = tasks.filter((t) => t.status === "done" || t.status === "released").length;
+      const boardOf = new Map(d.boards.map((b) => [b.id, b]));
+      const done = tasks.filter((t) => isTaskDone(t, boardOf.get(t.boardId))).length;
       return {
         id: p.id, key: p.key, name: p.name, iconColor: p.iconColor,
         total: tasks.length, done,
@@ -1094,8 +1219,10 @@ export const reportsApi = {
     plannedMinutes: number; spentMinutes: number;
   }> {
     await latency();
-    const tasks = db.get().tasks.filter((t) => (!projectId || t.projectId === projectId) && !t.isArchived);
-    const isDone = (t: Task) => t.status === "done" || t.status === "released";
+    const d = db.get();
+    const tasks = d.tasks.filter((t) => (!projectId || t.projectId === projectId) && !t.isArchived);
+    const boardOf = new Map(d.boards.map((b) => [b.id, b]));
+    const isDone = (t: Task) => isTaskDone(t, boardOf.get(t.boardId));
     const overdue = tasks.filter((t) => t.dueDate && new Date(t.dueDate).getTime() < Date.now() && !isDone(t)).length;
     const dueSoon = tasks.filter((t) => {
       if (!t.dueDate || isDone(t)) return false;
@@ -1130,11 +1257,11 @@ export const searchApi = {
     if (!s) return { projects: [], tasks: [], users: [], files: [], messages: [] };
     const d = db.get();
     return {
-      projects: d.projects.filter((p) => p.name.includes(s) || p.key.includes(s)).slice(0, 5),
-      tasks: d.tasks.filter((t) => !t.isArchived && (t.title.includes(s))).slice(0, 8),
-      users: d.users.filter((u) => u.name.includes(s) || u.username.includes(s)).slice(0, 5),
-      files: d.files.filter((f) => f.fileName.includes(s)).slice(0, 5),
-      messages: d.messages.filter((m) => m.body.includes(s)).slice(0, 5),
+      projects: d.projects.filter((p) => matchesText(p.name, s) || matchesText(p.key, s)).slice(0, 5),
+      tasks: d.tasks.filter((t) => !t.isArchived && matchesText(t.title, s)).slice(0, 8),
+      users: d.users.filter((u) => matchesText(u.name, s) || matchesText(u.username, s)).slice(0, 5),
+      files: d.files.filter((f) => matchesText(f.fileName, s)).slice(0, 5),
+      messages: d.messages.filter((m) => matchesText(m.body, s)).slice(0, 5),
     };
   },
 };

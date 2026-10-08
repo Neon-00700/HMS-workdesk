@@ -1,5 +1,6 @@
 /* ─── TanStack Query hooks — the ONLY way UI reads server state ─── */
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import type { Task } from "@/types/models";
 import { toast } from "sonner";
 import {
   authApi, usersApi, rolesApi, projectsApi, boardsApi, tasksApi,
@@ -13,6 +14,7 @@ export const qk = {
   user: (id: string) => ["users", id] as const,
   roles: ["roles"] as const,
   projects: ["projects"] as const,
+  taskStats: (q: TaskQuery) => ["task-stats", q] as const,
   project: (id: string) => ["projects", id] as const,
   members: (pid: string) => ["projects", pid, "members"] as const,
   milestones: (pid: string) => ["projects", pid, "milestones"] as const,
@@ -151,6 +153,9 @@ export const useBoardColumns = () => {
 
 /* ── tasks ── */
 export const useTasks = (q: TaskQuery) => useQuery({ queryKey: qk.tasks(q), queryFn: () => tasksApi.list(q) });
+/** Counts over the full set — use for stats, never derive from a paged list. */
+export const useTaskStats = (q: TaskQuery) =>
+  useQuery({ queryKey: qk.taskStats(q), queryFn: () => tasksApi.stats(q) });
 export const useBoardTasks = (bid: string) => useQuery({ queryKey: qk.boardTasks(bid), queryFn: () => tasksApi.list({ boardId: bid, pageSize: 500 }), enabled: !!bid });
 export const useTask = (id: string) => useQuery({ queryKey: qk.task(id), queryFn: () => tasksApi.get(id), enabled: !!id });
 
@@ -162,6 +167,7 @@ function useInvalidateTask() {
     qc.invalidateQueries({ queryKey: ["reports"] });
     qc.invalidateQueries({ queryKey: ["projects"] });
     qc.invalidateQueries({ queryKey: ["events"] });
+    qc.invalidateQueries({ queryKey: ["task-stats"] });
     if (task) {
       qc.invalidateQueries({ queryKey: qk.task(task.id) });
       qc.invalidateQueries({ queryKey: qk.boardTasks(task.boardId) });
@@ -186,14 +192,48 @@ export const useUpdateTask = () => {
 };
 export const useMoveTask = () => {
   const inv = useInvalidateTask();
+  const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, columnId }: { id: string; columnId: string }) => tasksApi.move(id, columnId),
+    mutationFn: ({ id, columnId, order }: { id: string; columnId: string; order?: number }) =>
+      tasksApi.move(id, columnId, order),
+    // Drop feels instant: rewrite the board cache up front, roll back on failure.
+    onMutate: async ({ id, columnId, order }) => {
+      await qc.cancelQueries({ queryKey: ["boards"] });
+      const snapshots = qc.getQueriesData<Task[]>({ queryKey: ["boards"] });
+      qc.setQueriesData<Task[]>({ queryKey: ["boards"] }, (old) => {
+        if (!old) return old;
+        let moved = false;
+        const next = old.map((t) => {
+          if (t.id === id) { moved = true; return { ...t, columnId, order: order ?? t.order }; }
+          return t;
+        });
+        return moved ? next : old;
+      });
+      return { snapshots };
+    },
+    onError: (e, _v, ctx) => {
+      ctx?.snapshots?.forEach(([key, data]) => qc.setQueryData(key, data));
+      toast.error(errMsg(e));
+    },
     onSuccess: (t) => inv(t),
-    onError: (e) => toast.error(errMsg(e)),
+    onSettled: () => { inv(); },
   });
 };
 export const useTaskActions = () => {
   const inv = useInvalidateTask();
+  const qc = useQueryClient();
+  // Only task-scoped caches are stale here, so avoid the full board sweep.
+  const wrapTask = <T, V>(fn: (v: V) => Promise<T>, msg?: string) =>
+    useMutation({
+      mutationFn: fn,
+      onSuccess: (t) => {
+        qc.invalidateQueries({ queryKey: ["tasks"] });
+        const task = t as { id?: string } | undefined;
+        if (task?.id) qc.invalidateQueries({ queryKey: qk.task(task.id) });
+        if (msg) toast.success(msg);
+      },
+      onError: (e) => toast.error(errMsg(e)),
+    });
   const wrap = <T, V>(fn: (v: V) => Promise<T>, msg?: string) =>
     useMutation({
       mutationFn: fn,
@@ -205,17 +245,18 @@ export const useTaskActions = () => {
     duplicate: wrap((id: string) => tasksApi.duplicate(id), "تسک کپی شد."),
     addComment: useMutation({
       mutationFn: ({ id, body }: { id: string; body: string }) => tasksApi.addComment(id, body),
-      onSuccess: (_, v) => inv({ id: v.id, boardId: "", projectId: "" }),
+      // Comments live on the task, so only that task's cache is stale.
+      onSuccess: () => { qc.invalidateQueries({ queryKey: ["tasks"] }); },
       onError: (e) => toast.error(errMsg(e)),
     }),
     deleteComment: wrap(({ id, cid }: { id: string; cid: string }) => tasksApi.deleteComment(id, cid).then(() => tasksApi.get(id))),
-    toggleChecklist: wrap(({ id, item }: { id: string; item: string }) => tasksApi.toggleChecklist(id, item)),
-    addChecklist: wrap(({ id, text, assigneeId }: { id: string; text: string; assigneeId?: string }) => tasksApi.addChecklist(id, text, assigneeId)),
-    assignChecklist: wrap(({ id, item, assigneeId }: { id: string; item: string; assigneeId?: string }) => tasksApi.assignChecklist(id, item, assigneeId)),
-    deleteChecklist: wrap(({ id, item }: { id: string; item: string }) => tasksApi.deleteChecklist(id, item)),
-    addSubtask: wrap(({ id, title }: { id: string; title: string }) => tasksApi.addSubtask(id, title)),
-    toggleSubtask: wrap(({ id, st }: { id: string; st: string }) => tasksApi.toggleSubtask(id, st)),
-    deleteSubtask: wrap(({ id, st }: { id: string; st: string }) => tasksApi.deleteSubtask(id, st)),
+    toggleChecklist: wrapTask(({ id, item }: { id: string; item: string }) => tasksApi.toggleChecklist(id, item)),
+    addChecklist: wrapTask(({ id, text, assigneeId }: { id: string; text: string; assigneeId?: string }) => tasksApi.addChecklist(id, text, assigneeId)),
+    assignChecklist: wrapTask(({ id, item, assigneeId }: { id: string; item: string; assigneeId?: string }) => tasksApi.assignChecklist(id, item, assigneeId)),
+    deleteChecklist: wrapTask(({ id, item }: { id: string; item: string }) => tasksApi.deleteChecklist(id, item)),
+    addSubtask: wrapTask(({ id, title }: { id: string; title: string }) => tasksApi.addSubtask(id, title)),
+    toggleSubtask: wrapTask(({ id, st }: { id: string; st: string }) => tasksApi.toggleSubtask(id, st)),
+    deleteSubtask: wrapTask(({ id, st }: { id: string; st: string }) => tasksApi.deleteSubtask(id, st)),
     addDependency: wrap(({ id, depId, kind }: { id: string; depId: string; kind?: "blocks" | "blocked_by" | "depends_on" | "related_to" }) => tasksApi.addDependency(id, depId, kind), "وابستگی ثبت شد."),
     removeDependency: wrap(({ id, dep }: { id: string; dep: string }) => tasksApi.removeDependency(id, dep)),
     addAttachment: wrap(({ id, meta }: { id: string; meta: { fileName: string; mimeType: string; sizeBytes: number; blob?: Blob } }) => tasksApi.addAttachment(id, meta), "فایل پیوست شد."),

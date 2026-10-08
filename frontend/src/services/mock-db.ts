@@ -9,6 +9,7 @@ import type {
 } from "@/types/models";
 import { SEED_ROLES, SEED_LABELS, ADMIN_ID, buildAdminUser } from "./seed";
 import { useAuthStore } from "@/stores/auth-store";
+import { recomputeProgress, syncCompletion } from "@/lib/task-state";
 
 const STORAGE_KEY = "hamyaran_db_v2";
 const LEGACY_KEYS = ["hamyaran_db_v1"];
@@ -55,6 +56,27 @@ function isValidShape(v: unknown): v is DBShape {
 }
 
 /** Backfill human keys (PROJECTKEY-12) for tasks created before keys existed. */
+/** Boards created before "done" was a column flag stored completion as a
+    hardcoded `status`. Promote those columns to isDoneColumn so isTaskDone()
+    reports the same result on old and new data alike, then resync progress and
+    completion dates so stored totals agree with the new definition. */
+function backfillDoneColumns(d: DBShape): void {
+  d.boards.forEach((b) => {
+    let touched = false;
+    b.columns.forEach((c) => {
+      if (c.isDoneColumn === undefined) {
+        c.isDoneColumn = c.key === "done" || c.key === "released";
+        touched = true;
+      }
+    });
+    if (!touched) return;
+    d.tasks.filter((t) => t.boardId === b.id).forEach((t) => {
+      t.progress = recomputeProgress(t, b);
+      syncCompletion(t, b);
+    });
+  });
+}
+
 function backfillTaskKeys(d: DBShape): void {
   const counters = new Map<string, number>();
   d.tasks.forEach((t) => {
@@ -86,8 +108,13 @@ class MockDB {
           if (isValidShape(parsed)) {
             // Safety net: the workspace always keeps at least the admin.
             if (parsed.users.length === 0) parsed.users = [buildAdminUser()];
+            // Migrations rewrite the snapshot in memory; write it back so the
+            // upgraded data is what every later read (and reload) sees.
+            const before = JSON.stringify(parsed);
+            backfillDoneColumns(parsed);
             backfillTaskKeys(parsed);
             this.data = parsed;
+            if (JSON.stringify(parsed) !== before) this.persist();
             return this.data;
           }
         }
@@ -101,12 +128,17 @@ class MockDB {
     return this.ensure();
   }
 
-  /** Mutate + persist + notify realtime subscribers. */
-  update(fn: (db: DBShape) => void): void {
-    fn(this.ensure());
+  /** Writes the snapshot to localStorage. */
+  private persist(): void {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
     } catch { /* quota -> ignore */ }
+  }
+
+  /** Mutate + persist + notify realtime subscribers. */
+  update(fn: (db: DBShape) => void): void {
+    fn(this.ensure());
+    this.persist();
     this.listeners.forEach((l) => l());
   }
 
@@ -117,9 +149,7 @@ class MockDB {
 
   reset(): void {
     this.data = freshDB();
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.data));
-    } catch { /* ignore */ }
+    this.persist();
     this.listeners.forEach((l) => l());
   }
 

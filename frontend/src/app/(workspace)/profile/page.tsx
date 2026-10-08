@@ -13,8 +13,10 @@ import { UPLOAD_POLICIES } from "@/config/constants";
 import { validateUpload } from "@/lib/file-validation";
 import { toFaDigits } from "@/lib/utils";
 import { formatDateFa } from "@/lib/format";
-import { useTasks, useProjects, useActivity } from "@/services/queries";
+import { useTasks, useTaskStats, useProjects, useActivity } from "@/services/queries";
 import { usersApi } from "@/services/api";
+import { db } from "@/services/mock-db";
+import { isTaskDone } from "@/lib/task-state";
 import { useAuthStore } from "@/stores/auth-store";
 import { useUIStore } from "@/stores/ui-store";
 import { toast } from "sonner";
@@ -47,7 +49,9 @@ export default function ProfilePage() {
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
   const openTask = useUIStore((s) => s.openTask);
-  const { data: myTasks } = useTasks({ assigneeId: user?.id, pageSize: 100 });
+  const myQ = { assigneeId: user?.id } as const;
+  const { data: myTasks } = useTasks(myQ);
+  const { data: myStats } = useTaskStats(myQ);
   const { data: projects = [] } = useProjects();
   const { data: activity = [] } = useActivity();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -56,9 +60,10 @@ export default function ProfilePage() {
   if (!user) return null;
 
   const tasks = myTasks?.items ?? [];
-  const done = tasks.filter((t) => t.status === "done" || t.status === "released").length;
+  // Completion rate comes from the aggregate, not from the fetched page.
+  const totalCount = myStats?.total ?? tasks.length;
   const myActivity = activity.filter((a) => a.actorId === user.id).slice(0, 5);
-  const completion = tasks.length ? Math.round((done / tasks.length) * 100) : 0;
+  const completion = myStats?.progress ?? 0;
 
   const onAvatar = async (f: File | undefined) => {
     if (!f) return;
@@ -120,11 +125,11 @@ export default function ProfilePage() {
       <div className="grid gap-4 sm:grid-cols-3">
         <Card><CardContent className="p-5">
           <p className="text-[13px] text-muted-foreground">تسک‌های باز</p>
-          <p className="mt-1 text-2xl font-bold tnum">{toFaDigits(tasks.length - done)}</p>
+          <p className="mt-1 text-2xl font-bold tnum">{toFaDigits(myStats?.open ?? tasks.filter((t) => !isTaskDone(t, db.board(t.boardId))).length)}</p>
         </CardContent></Card>
         <Card><CardContent className="p-5">
           <p className="text-[13px] text-muted-foreground">تکمیل‌شده</p>
-          <p className="mt-1 text-2xl font-bold text-emerald-600 tnum">{toFaDigits(done)}</p>
+          <p className="mt-1 text-2xl font-bold text-emerald-600 tnum">{toFaDigits(myStats?.done ?? tasks.filter((t) => isTaskDone(t, db.board(t.boardId))).length)}</p>
         </CardContent></Card>
         <Card><CardContent className="p-5">
           <p className="text-[13px] text-muted-foreground">نرخ تکمیل</p>
@@ -137,7 +142,7 @@ export default function ProfilePage() {
         <div>
           <h3 className="mb-3 text-[15px] font-semibold">تسک‌های جاری</h3>
           <div className="grid gap-3 sm:grid-cols-2">
-            {tasks.filter((t) => t.status !== "done" && t.status !== "released").slice(0, 4).map((t) => (
+            {tasks.filter((t) => !isTaskDone(t, db.board(t.boardId))).slice(0, 4).map((t) => (
               <TaskCard key={t.id} task={t} compact onOpen={() => openTask(t.id)} />
             ))}
           </div>

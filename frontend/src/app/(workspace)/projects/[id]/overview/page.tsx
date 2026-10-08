@@ -16,6 +16,8 @@ import { toFaDigits } from "@/lib/utils";
 import {
   useTasks, useMilestones, useActivity, useFiles, useConversations, useProject, useEpics,
 } from "@/services/queries";
+import { db } from "@/services/mock-db";
+import { isTaskDone } from "@/lib/task-state";
 import { useUIStore } from "@/stores/ui-store";
 
 export default function ProjectOverviewPage() {
@@ -31,9 +33,10 @@ export default function ProjectOverviewPage() {
 
   const tasks = tasksData?.items ?? [];
   const blocked = tasks.filter((t) => t.isBlocked).slice(0, 3);
-  const overdue = tasks.filter((t) => t.dueDate && new Date(t.dueDate).getTime() < Date.now() && t.status !== "done" && t.status !== "released").slice(0, 4);
+  const isDone = (t: (typeof tasks)[number]) => isTaskDone(t, db.board(t.boardId));
+  const overdue = tasks.filter((t) => !isDone(t) && t.dueDate && new Date(t.dueDate).getTime() < Date.now()).slice(0, 4);
   const dueSoon = tasks.filter((t) => {
-    if (!t.dueDate) return false;
+    if (!t.dueDate || isDone(t)) return false;
     const dt = new Date(t.dueDate).getTime() - Date.now();
     return dt > 0 && dt < 72 * 3600_000;
   }).slice(0, 4);

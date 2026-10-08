@@ -13,6 +13,8 @@ import { EmptyState, ErrorState, LoadingList } from "@/components/shared/states"
 import { PRIORITY_META } from "@/config/constants";
 import { toFaDigits } from "@/lib/utils";
 import { useTasks, useProjects, useBoards } from "@/services/queries";
+import { db } from "@/services/mock-db";
+import { isTaskDone, matchesText } from "@/lib/task-state";
 import { useAuthStore } from "@/stores/auth-store";
 import { useUIStore } from "@/stores/ui-store";
 import { CheckSquare } from "lucide-react";
@@ -41,20 +43,21 @@ function MyTasksInner() {
   const counts = useMemo(() => ({
     all: all.length,
     today: all.filter((t) => t.dueDate && new Date(t.dueDate).toDateString() === new Date().toDateString()).length,
-    overdue: all.filter((t) => t.dueDate && new Date(t.dueDate).getTime() < Date.now() && t.status !== "done" && t.status !== "released").length,
+    overdue: all.filter((t) => isTaskDone(t, db.board(t.boardId)) === false && t.dueDate && new Date(t.dueDate).getTime() < Date.now()).length,
     blocked: all.filter((t) => t.isBlocked).length,
-    done: all.filter((t) => t.status === "done" || t.status === "released").length,
+    done: all.filter((t) => isTaskDone(t, db.board(t.boardId))).length,
   }), [all]);
 
   const shown = useMemo(() => all.filter((t) => {
+    const done = isTaskDone(t, db.board(t.boardId));
     if (filter === "today" && !(t.dueDate && new Date(t.dueDate).toDateString() === new Date().toDateString())) return false;
-    if (filter === "overdue" && !(t.dueDate && new Date(t.dueDate).getTime() < Date.now() && t.status !== "done" && t.status !== "released")) return false;
+    if (filter === "overdue" && (done || !t.dueDate || new Date(t.dueDate).getTime() >= Date.now())) return false;
     if (filter === "blocked" && !t.isBlocked) return false;
-    if (filter === "done" && !(t.status === "done" || t.status === "released")) return false;
-    if (filter === "all" && (t.status === "done" || t.status === "released")) return false;
+    if (filter === "done" && !done) return false;
+    if (filter === "all" && done) return false;
     if (priority !== "all" && t.priority !== priority) return false;
     if (project !== "all" && t.projectId !== project) return false;
-    if (q && !t.title.includes(q)) return false;
+    if (q && !matchesText(t.title, q)) return false;
     return true;
   }), [all, filter, priority, project, q]);
 

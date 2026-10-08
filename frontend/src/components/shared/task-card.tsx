@@ -6,14 +6,18 @@ import { Progress } from "@/components/ui/progress";
 import { UserAvatar } from "@/components/ui/avatar";
 import { PriorityBadge, LabelChip } from "./badges";
 import { formatShortDateFa, isOverdue, isDueSoon } from "@/lib/format";
+import { isTaskDone } from "@/lib/task-state";
+import { db } from "@/services/mock-db";
 import { formatMinutes, cn } from "@/lib/utils";
 import type { Task } from "@/types/models";
 
 export const TaskCard = memo(function TaskCard({ task, onOpen, compact }: {
   task: Task; onOpen?: (t: Task) => void; compact?: boolean;
 }) {
-  const overdue = isOverdue(task.dueDate, task.status);
-  const soon = isDueSoon(task.dueDate);
+  // Deadline styling follows the column, not a status string.
+  const done = isTaskDone(task, db.board(task.boardId));
+  const overdue = !done && isOverdue(task.dueDate);
+  const soon = !done && isDueSoon(task.dueDate);
   const doneSubs = task.subtasks.filter((s) => s.isDone).length;
 
   return (

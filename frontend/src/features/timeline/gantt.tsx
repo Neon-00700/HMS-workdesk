@@ -10,6 +10,8 @@ import { PRIORITY_META, STREAM_META } from "@/config/constants";
 import { formatShortDateFa } from "@/lib/format";
 import { toFaDigits, cn } from "@/lib/utils";
 import { useTasks, useMilestones } from "@/services/queries";
+import { db } from "@/services/mock-db";
+import { isTaskDone } from "@/lib/task-state";
 import { useUIStore } from "@/stores/ui-store";
 import type { Task } from "@/types/models";
 
@@ -116,7 +118,7 @@ function GanttRow({ task, start, colW, days, todayX, onOpen }: {
   const s = Math.max(0, Math.min(days - 1, startX));
   const e = Math.max(s + 1, Math.min(days, dueX + 1));
   const w = (e - s) * colW;
-  const done = task.status === "done" || task.status === "released";
+  const done = isTaskDone(task, db.board(task.boardId));
   const overdue = !done && dueX < todayX;
   const color = done ? "#16a34a" : overdue ? "#dc2626" : task.priority === "critical" ? "#f97316" : PRIORITY_META[task.priority] ? "#0ea5e9" : "#0ea5e9";
 

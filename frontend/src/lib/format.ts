@@ -76,6 +76,8 @@ export function timeAgoFa(d: Date | string | number, now = new Date()): string {
   return future ? `${toFaDigits(y)} سال بعد` : `${toFaDigits(y)} سال پیش`;
 }
 
+/** Deadline in the past. `status` is still honoured for callers that only
+    hold a column key; prefer taskTimeState() wherever a board is available. */
 export function isOverdue(dueDate?: string | null, status?: string): boolean {
   if (!dueDate) return false;
   if (status === "done" || status === "released") return false;

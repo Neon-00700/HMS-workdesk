@@ -18,18 +18,23 @@ import { EmptyState } from "@/components/shared/states";
 import { PROJECT_STATUS_META } from "@/config/constants";
 import { timeAgoFa, formatShortDateFa, formatDateFa, weekdayFa, isOverdue } from "@/lib/format";
 import { toFaDigits, cn } from "@/lib/utils";
-import { useProjects, useTasks, useActivity, useWorkload, useMoveTask, qk } from "@/services/queries";
+import { useProjects, useTasks, useTaskStats, useActivity, useWorkload, useMoveTask, qk } from "@/services/queries";
 import { projectsApi, boardsApi } from "@/services/api";
+import { db } from "@/services/mock-db";
+import { isTaskDone } from "@/lib/task-state";
 import { useAuthStore } from "@/stores/auth-store";
 import { useUIStore } from "@/stores/ui-store";
 import { usePermission } from "@/hooks/use-permission";
 import type { Task, TaskPriority, ProjectMember } from "@/types/models";
 
 /* ─── helpers ─── */
-const isDone = (t: Task) => t.status === "done" || t.status === "released";
+/* Completion is a property of the task's column, not a status string.
+   Synchronous read so it stays usable inside plain array filters. */
+const isDone = (t: Task) => isTaskDone(t, db.board(t.boardId));
 const ACTIVE_STATUSES = ["in_progress", "fixing", "review", "testing", "verification", "deploy", "investigating"];
 const isActive = (t: Task) => ACTIVE_STATUSES.includes(t.status);
-const isOverdueTask = (t: Task) => isOverdue(t.dueDate, t.status);
+const isOverdueTask = (t: Task) =>
+  !isTaskDone(t, db.board(t.boardId)) && isOverdue(t.dueDate);
 
 const PRI: Record<TaskPriority, { label: string; cls: string }> = {
   critical: { label: "بحرانی", cls: "bg-red-500/10 text-red-600 dark:text-red-400" },
@@ -100,7 +105,10 @@ export default function DashboardPage() {
   const move = useMoveTask();
 
   const { data: projects = [], isLoading: pLoading } = useProjects();
-  const { data: myTasksData, isLoading: tLoading } = useTasks({ assigneeId: user?.id ?? "__none__", pageSize: 200 });
+  const myQ = { assigneeId: user?.id ?? "__none__" } as const;
+  const { data: myTasksData, isLoading: tLoading } = useTasks(myQ);
+  /* Counts come from the aggregate endpoint so they never hit a page ceiling. */
+  const { data: myStats } = useTaskStats(myQ);
   const { data: activity = [] } = useActivity();
   const { data: workload = [] } = useWorkload();
 
@@ -112,6 +120,11 @@ export default function DashboardPage() {
   const done = useMemo(() => myTasks.filter(isDone), [myTasks]);
   const overdue = useMemo(() => myTasks.filter(isOverdueTask), [myTasks]);
   const active = useMemo(() => myTasks.filter((t) => !isDone(t) && isActive(t)), [myTasks]);
+  /* Aggregate totals — the KPI cards and donut read these, not the page. */
+  const statDone = myStats?.done ?? done.length;
+  const statOverdue = myStats?.overdue ?? overdue.length;
+  const statOpen = myStats?.open ?? myTasks.filter((t) => !isDone(t)).length;
+  const statTotal = myStats?.total ?? myTasks.length;
 
   /* today's tasks: open, overdue first */
   const todayTasks = useMemo(
@@ -168,13 +181,13 @@ export default function DashboardPage() {
   const dist = useMemo(() => {
     const rest = myTasks.filter((t) => !isDone(t) && !isOverdueTask(t) && !isActive(t));
     return [
-      { key: "done", label: "انجام‌شده", value: done.length, color: "#22c55e" },
-      { key: "active", label: "در حال انجام", value: active.filter((t) => !isOverdueTask(t)).length, color: "#3b82f6" },
-      { key: "overdue", label: "عقب‌افتاده", value: overdue.length, color: "#ef4444" },
+      { key: "done", label: "انجام‌شده", value: statDone, color: "#22c55e" },
+      { key: "active", label: "در حال انجام", value: Math.max(0, statOpen - statOverdue - rest.length), color: "#3b82f6" },
+      { key: "overdue", label: "عقب‌افتاده", value: statOverdue, color: "#ef4444" },
       { key: "backlog", label: "بک‌لاگ", value: rest.length, color: "#cbd5e1" },
     ];
-  }, [myTasks, done, active, overdue]);
-  const total = myTasks.length;
+  }, [myTasks, statDone, statOpen, statOverdue]);
+  const total = statTotal;
 
   /* workload rows (open tasks per member) */
   const loadRows = useMemo(

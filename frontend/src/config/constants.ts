@@ -1,4 +1,5 @@
 import type { TaskPriority, Task } from "@/types/models";
+import type { TaskTimeState } from "@/lib/task-state";
 
 export const APP_NAME = "همیاران ورک‌اسپیس";
 export const APP_NAME_EN = "Hamyaran Workdesk";
@@ -36,6 +37,32 @@ export const HEALTH_META = {
 } as const;
 
 export const FILE_FOLDERS = ["دیزاین", "اسناد", "توسعه", "گزارش‌ها", "سایر"] as const;
+
+/** The four deadline states of a task — see lib/task-state.taskTimeState. */
+export const TASK_TIME_STATE_META: Record<
+  TaskTimeState,
+  { label: string; short: string; color: string; bg: string; bar: string; dot: string }
+> = {
+  done: {
+    label: "انجام‌شده", short: "انجام", color: "text-emerald-700 dark:text-emerald-400",
+    bg: "bg-emerald-500/10", bar: "#16a34a", dot: "bg-emerald-600",
+  },
+  overdue: {
+    label: "معوق", short: "معوق", color: "text-red-600 dark:text-red-400",
+    bg: "bg-red-500/10", bar: "#dc2626", dot: "bg-red-600",
+  },
+  scheduled: {
+    label: "زمان‌بندی‌شده", short: "زمان‌دار", color: "text-sky-600 dark:text-sky-400",
+    bg: "bg-sky-500/10", bar: "#0ea5e9", dot: "bg-sky-600",
+  },
+  unscheduled: {
+    label: "بدون زمان", short: "بدون زمان", color: "text-slate-500 dark:text-slate-400",
+    bg: "bg-slate-500/10", bar: "#94a3b8", dot: "bg-slate-400",
+  },
+};
+
+/** Stable order for the four-state bar and its legend. */
+export const TASK_TIME_STATE_ORDER = ["done", "overdue", "scheduled", "unscheduled"] as const;
 
 /* Upload policies — client mirrors backend FilePolicy. */
 export interface UploadPolicy {

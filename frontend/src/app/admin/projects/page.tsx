@@ -67,7 +67,10 @@ export default function AdminProjectsPage() {
                         confirmLabel="حذف"
                         onConfirm={async () => {
                           await projectsApi.remove(p.id);
-                          qc.invalidateQueries({ queryKey: ["projects"] });
+                          // Cascade also removed the project's boards, tasks,
+                          // files, members, milestones, events and chat.
+                          ["projects", "boards", "tasks", "task-stats", "reports", "events", "files", "activity", "chat"]
+                            .forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
                           toast.success("پروژه حذف شد.");
                         }}
                       />

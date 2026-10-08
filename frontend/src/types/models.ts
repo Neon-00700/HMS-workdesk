@@ -137,6 +137,9 @@ export interface Task {
   projectId: ID;
   boardId: ID;
   columnId: ID;
+  /** Column the task was in before it was completed, so the one-click
+      complete toggle can send it back where it came from. */
+  previousColumnId?: ID;
   epicId?: ID;
   parentId?: ID;
   title: string;

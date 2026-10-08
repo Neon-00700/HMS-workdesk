@@ -127,7 +127,7 @@ export default function ProjectTasksPage() {
             <TableBody>
               {shown.map((t) => {
                 const c = colOf(t);
-                const overdue = isOverdue(t.dueDate, t.status);
+                const overdue = !c?.isDoneColumn && isOverdue(t.dueDate);
                 return (
                   <TableRow key={t.id} className="cursor-pointer" onClick={() => openTask(t.id)}>
                     <TableCell className="max-w-[17.5rem]">

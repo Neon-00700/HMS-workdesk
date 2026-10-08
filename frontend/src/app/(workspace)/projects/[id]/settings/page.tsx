@@ -1,5 +1,6 @@
 "use client";
 import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -33,6 +34,7 @@ const COLORS = ["#16a34a", "#0ea5e9", "#8b5cf6", "#f59e0b", "#ec4899", "#14b8a6"
 export default function ProjectSettingsPage() {
   const { id } = useParams() as { id: string };
   const router = useRouter();
+  const qc = useQueryClient();
   const { data: project, isLoading, isError } = useProject(id);
   const update = useUpdateProject();
   const { can } = usePermission();
@@ -148,6 +150,10 @@ export default function ProjectSettingsPage() {
             confirmLabel="حذف دائمی"
             onConfirm={async () => {
               await projectsApi.remove(id);
+              // The cascade removed boards/tasks/files/members/milestones/
+              // events/chat, so every related cache must go.
+              ["projects", "boards", "tasks", "task-stats", "reports", "events", "files", "activity", "chat"]
+                .forEach((k) => qc.invalidateQueries({ queryKey: [k] }));
               toast.success("پروژه حذف شد.");
               router.replace("/projects");
             }}
