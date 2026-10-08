@@ -26,8 +26,20 @@ export class ApiError extends Error {
   }
 }
 
-const LATENCY = { min: 80, max: 320 };
+/* Simulated network latency, in ms, as "min:max".
+   The local adapter answers from memory, so this defaults to 0 and every
+   interaction is instant. Set NEXT_PUBLIC_API_LATENCY (e.g. "150:400") to
+   exercise loading/spinner states against a server-like delay. */
+const LATENCY = (() => {
+  const raw = process.env.NEXT_PUBLIC_API_LATENCY?.trim();
+  if (!raw) return { min: 0, max: 0 };
+  const [min, max] = raw.split(":").map(Number);
+  const lo = Number.isFinite(min) ? Math.max(0, min) : 0;
+  const hi = Number.isFinite(max as number) ? Math.max(0, max as number) : lo;
+  return { min: lo, max: Math.max(lo, hi) };
+})();
 async function latency(): Promise<void> {
+  if (LATENCY.max <= 0) return;
   await sleep(LATENCY.min + Math.random() * (LATENCY.max - LATENCY.min));
 }
 const now = () => new Date().toISOString();

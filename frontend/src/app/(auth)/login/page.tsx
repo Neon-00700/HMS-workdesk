@@ -55,8 +55,9 @@ function LoginInner() {
       />
       <div className="absolute inset-0 bg-black/10" />
 
-      <div className="relative z-10 flex min-h-screen items-center justify-center p-4 lg:justify-start lg:p-10">
-        {/* Login card (right side in RTL) */}
+      {/* Card is centered in the viewport; the brand block sits bottom-left. */}
+      <div className="relative z-10 flex min-h-screen items-center justify-center p-4 lg:p-10">
+        {/* Login card */}
         <div className="w-full max-w-[26rem] rounded-3xl bg-white p-8 shadow-pop sm:p-10">
           <div className="flex flex-col items-center text-center">
             <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0c2318] text-white">
